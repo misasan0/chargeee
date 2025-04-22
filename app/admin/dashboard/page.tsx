@@ -3,54 +3,13 @@
 import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { createClientComponentClient } from "@supabase/auth-helpers-nextjs"
-import {
-  getUsers,
-  getMessages,
-  getActivities,
-  getStats,
-  deleteUser,
-  deleteMessage,
-  deleteActivity,
-} from "@/lib/supabase-admin"
-import type { User, Message, Activity, Stats } from "@/types/admin"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import {
-  Users,
-  MessageSquare,
-  ActivityIcon,
-  LogOut,
-  RefreshCw,
-  Search,
-  Trash2,
-  Repeat,
-  UserCheck,
-  Loader2,
-} from "lucide-react"
-import { useToast } from "@/components/ui/use-toast"
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@/components/ui/alert-dialog"
-import { Badge } from "@/components/ui/badge"
-import { Skeleton } from "@/components/ui/skeleton"
+import Link from "next/link"
 
 export default function DashboardPage() {
-  const [users, setUsers] = useState<User[]>([])
-  const [messages, setMessages] = useState<Message[]>([])
-  const [activities, setActivities] = useState<Activity[]>([])
-  const [stats, setStats] = useState<Stats>({
+  const [users, setUsers] = useState<any[]>([])
+  const [messages, setMessages] = useState<any[]>([])
+  const [activities, setActivities] = useState<any[]>([])
+  const [stats, setStats] = useState({
     totalUsers: 0,
     totalMessages: 0,
     activeUsers: 0,
@@ -59,11 +18,10 @@ export default function DashboardPage() {
   const [loadingData, setLoadingData] = useState(true)
   const [searchQuery, setSearchQuery] = useState("")
   const [messageType, setMessageType] = useState<string>("all")
-  const [deleteLoading, setDeleteLoading] = useState<string | null>(null)
+  const [activeTab, setActiveTab] = useState("users")
 
   const router = useRouter()
   const supabase = createClientComponentClient()
-  const { toast } = useToast()
 
   useEffect(() => {
     checkSession()
@@ -85,94 +43,110 @@ export default function DashboardPage() {
   const fetchData = async () => {
     setLoadingData(true)
     try {
-      const [usersData, messagesData, activitiesData, statsData] = await Promise.all([
-        getUsers(searchQuery),
-        getMessages(searchQuery, messageType),
-        getActivities(searchQuery),
-        getStats(),
-      ])
+      // Kullanıcıları getir
+      let userQuery = supabase.from("users").select("*").order("created_at", { ascending: false })
 
-      setUsers(usersData)
-      setMessages(messagesData)
-      setActivities(activitiesData)
-      setStats(statsData)
+      if (searchQuery) {
+        userQuery = userQuery.or(
+          `username.ilike.%${searchQuery}%,first_name.ilike.%${searchQuery}%,last_name.ilike.%${searchQuery}%,telegram_id.ilike.%${searchQuery}%`,
+        )
+      }
 
-      toast({
-        title: "Veriler güncellendi",
-        description: "Tüm veriler başarıyla yüklendi.",
+      const { data: usersData } = await userQuery
+      setUsers(usersData || [])
+
+      // Mesajları getir
+      let messageQuery = supabase
+        .from("messages")
+        .select("*, user:users(username, first_name, last_name)")
+        .order("created_at", { ascending: false })
+
+      if (searchQuery) {
+        messageQuery = messageQuery.or(
+          `message_text.ilike.%${searchQuery}%,telegram_id.ilike.%${searchQuery}%,username.ilike.%${searchQuery}%`,
+        )
+      }
+
+      if (messageType && messageType !== "all") {
+        messageQuery = messageQuery.eq("message_type", messageType)
+      }
+
+      const { data: messagesData } = await messageQuery
+      setMessages(messagesData || [])
+
+      // Aktiviteleri getir
+      let activityQuery = supabase
+        .from("activity_logs")
+        .select("*, user:users(username, first_name, last_name)")
+        .order("created_at", { ascending: false })
+
+      if (searchQuery) {
+        activityQuery = activityQuery.or(
+          `action.ilike.%${searchQuery}%,details.ilike.%${searchQuery}%,telegram_id.ilike.%${searchQuery}%`,
+        )
+      }
+
+      const { data: activitiesData } = await activityQuery
+      setActivities(activitiesData || [])
+
+      // İstatistikleri hesapla
+      const oneDayAgo = new Date()
+      oneDayAgo.setDate(oneDayAgo.getDate() - 1)
+
+      const { count: activeCount } = await supabase
+        .from("users")
+        .select("*", { count: "exact", head: true })
+        .gt("last_active", oneDayAgo.toISOString())
+
+      // Dönüşüm sayısını hesapla
+      const { count: conversionCount } = await supabase
+        .from("activity_logs")
+        .select("*", { count: "exact", head: true })
+        .ilike("action", "%conversion%")
+
+      setStats({
+        totalUsers: usersData?.length || 0,
+        totalMessages: messagesData?.length || 0,
+        activeUsers: activeCount || 0,
+        conversionCount: conversionCount || 0,
       })
     } catch (error) {
       console.error("Veri alınırken hata oluştu:", error)
-      toast({
-        variant: "destructive",
-        title: "Hata",
-        description: "Veriler alınırken bir hata oluştu.",
-      })
     } finally {
       setLoadingData(false)
     }
   }
 
   const handleDeleteUser = async (userId: string) => {
-    setDeleteLoading(userId)
     try {
-      await deleteUser(userId)
+      await supabase.from("users").delete().eq("id", userId)
       setUsers(users.filter((user) => user.id !== userId))
-      toast({
-        title: "Kullanıcı silindi",
-        description: "Kullanıcı başarıyla silindi.",
-      })
+      alert("Kullanıcı başarıyla silindi.")
     } catch (error) {
       console.error("Kullanıcı silinirken hata:", error)
-      toast({
-        variant: "destructive",
-        title: "Hata",
-        description: "Kullanıcı silinirken bir hata oluştu.",
-      })
-    } finally {
-      setDeleteLoading(null)
+      alert("Kullanıcı silinirken bir hata oluştu.")
     }
   }
 
   const handleDeleteMessage = async (messageId: string) => {
-    setDeleteLoading(messageId)
     try {
-      await deleteMessage(messageId)
+      await supabase.from("messages").delete().eq("id", messageId)
       setMessages(messages.filter((message) => message.id !== messageId))
-      toast({
-        title: "Mesaj silindi",
-        description: "Mesaj başarıyla silindi.",
-      })
+      alert("Mesaj başarıyla silindi.")
     } catch (error) {
       console.error("Mesaj silinirken hata:", error)
-      toast({
-        variant: "destructive",
-        title: "Hata",
-        description: "Mesaj silinirken bir hata oluştu.",
-      })
-    } finally {
-      setDeleteLoading(null)
+      alert("Mesaj silinirken bir hata oluştu.")
     }
   }
 
   const handleDeleteActivity = async (activityId: string) => {
-    setDeleteLoading(activityId)
     try {
-      await deleteActivity(activityId)
+      await supabase.from("activity_logs").delete().eq("id", activityId)
       setActivities(activities.filter((activity) => activity.id !== activityId))
-      toast({
-        title: "Aktivite silindi",
-        description: "Aktivite başarıyla silindi.",
-      })
+      alert("Aktivite başarıyla silindi.")
     } catch (error) {
       console.error("Aktivite silinirken hata:", error)
-      toast({
-        variant: "destructive",
-        title: "Hata",
-        description: "Aktivite silinirken bir hata oluştu.",
-      })
-    } finally {
-      setDeleteLoading(null)
+      alert("Aktivite silinirken bir hata oluştu.")
     }
   }
 
@@ -181,473 +155,554 @@ export default function DashboardPage() {
   }
 
   return (
-    <div className="min-h-screen bg-background">
-      <header className="sticky top-0 z-10 border-b bg-background">
-        <div className="container flex h-16 items-center justify-between py-4">
-          <h1 className="text-2xl font-bold">Telegram Bot Admin Paneli</h1>
-          <Button variant="outline" onClick={handleLogout}>
-            <LogOut className="mr-2 h-4 w-4" />
+    <div className="min-h-screen bg-gray-100">
+      <header className="sticky top-0 z-10 bg-white shadow">
+        <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 py-4 sm:px-6 lg:px-8">
+          <h1 className="text-2xl font-bold text-gray-900">Telegram Bot Admin Paneli</h1>
+          <button
+            onClick={handleLogout}
+            className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+          >
             Çıkış Yap
-          </Button>
+          </button>
         </div>
       </header>
 
-      <main className="container py-6">
-        <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-4">
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Toplam Kullanıcı</CardTitle>
-              <Users className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              {loadingData ? (
-                <Skeleton className="h-8 w-20" />
-              ) : (
-                <>
-                  <div className="text-2xl font-bold">{stats.totalUsers}</div>
-                  <p className="text-xs text-muted-foreground">Kayıtlı toplam kullanıcı sayısı</p>
-                </>
-              )}
-            </CardContent>
-          </Card>
+      <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+        <div className="mb-6 grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-4">
+          <div className="overflow-hidden rounded-lg bg-white shadow">
+            <div className="px-4 py-5 sm:p-6">
+              <div className="flex items-center">
+                <div className="flex-shrink-0 rounded-md bg-blue-500 p-3">
+                  <svg
+                    className="h-6 w-6 text-white"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                    xmlns="http://www.w3.org/2000/svg"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth="2"
+                      d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"
+                    ></path>
+                  </svg>
+                </div>
+                <div className="ml-5 w-0 flex-1">
+                  <dl>
+                    <dt className="truncate text-sm font-medium text-gray-500">Toplam Kullanıcı</dt>
+                    <dd>
+                      <div className="text-lg font-medium text-gray-900">
+                        {loadingData ? "..." : stats.totalUsers}
+                      </div>
+                    </dd>
+                  </dl>
+                </div>
+              </div>
+            </div>
+          </div>
 
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Toplam Mesaj</CardTitle>
-              <MessageSquare className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              {loadingData ? (
-                <Skeleton className="h-8 w-20" />
-              ) : (
-                <>
-                  <div className="text-2xl font-bold">{stats.totalMessages}</div>
-                  <p className="text-xs text-muted-foreground">İşlenen toplam mesaj sayısı</p>
-                </>
-              )}
-            </CardContent>
-          </Card>
+          <div className="overflow-hidden rounded-lg bg-white shadow">
+            <div className="px-4 py-5 sm:p-6">
+              <div className="flex items-center">
+                <div className="flex-shrink-0 rounded-md bg-green-500 p-3">
+                  <svg
+                    className="h-6 w-6 text-white"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                    xmlns="http://www.w3.org/2000/svg"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth="2"
+                      d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"
+                    ></path>
+                  </svg>
+                </div>
+                <div className="ml-5 w-0 flex-1">
+                  <dl>
+                    <dt className="truncate text-sm font-medium text-gray-500">Toplam Mesaj</dt>
+                    <dd>
+                      <div className="text-lg font-medium text-gray-900">
+                        {loadingData ? "..." : stats.totalMessages}
+                      </div>
+                    </dd>
+                  </dl>
+                </div>
+              </div>
+            </div>
+          </div>
 
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Aktif Kullanıcılar</CardTitle>
-              <UserCheck className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              {loadingData ? (
-                <Skeleton className="h-8 w-20" />
-              ) : (
-                <>
-                  <div className="text-2xl font-bold">{stats.activeUsers}</div>
-                  <p className="text-xs text-muted-foreground">Son 24 saat içinde aktif kullanıcılar</p>
-                </>
-              )}
-            </CardContent>
-          </Card>
+          <div className="overflow-hidden rounded-lg bg-white shadow">
+            <div className="px-4 py-5 sm:p-6">
+              <div className="flex items-center">
+                <div className="flex-shrink-0 rounded-md bg-purple-500 p-3">
+                  <svg
+                    className="h-6 w-6 text-white"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                    xmlns="http://www.w3.org/2000/svg"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth="2"
+                      d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
+                    ></path>
+                  </svg>
+                </div>
+                <div className="ml-5 w-0 flex-1">
+                  <dl>
+                    <dt className="truncate text-sm font-medium text-gray-500">Aktif Kullanıcılar</dt>
+                    <dd>
+                      <div className="text-lg font-medium text-gray-900">
+                        {loadingData ? "..." : stats.activeUsers}
+                      </div>
+                    </dd>
+                  </dl>
+                </div>
+              </div>
+            </div>
+          </div>
 
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Dönüşüm Sayısı</CardTitle>
-              <Repeat className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              {loadingData ? (
-                <Skeleton className="h-8 w-20" />
-              ) : (
-                <>
-                  <div className="text-2xl font-bold">{stats.conversionCount}</div>
-                  <p className="text-xs text-muted-foreground">Toplam para dönüşümü sayısı</p>
-                </>
-              )}
-            </CardContent>
-          </Card>
+          <div className="overflow-hidden rounded-lg bg-white shadow">
+            <div className="px-4 py-5 sm:p-6">
+              <div className="flex items-center">
+                <div className="flex-shrink-0 rounded-md bg-yellow-500 p-3">
+                  <svg
+                    className="h-6 w-6 text-white"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                    xmlns="http://www.w3.org/2000/svg"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth="2"
+                      d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"
+                    ></path>
+                  </svg>
+                </div>
+                <div className="ml-5 w-0 flex-1">
+                  <dl>
+                    <dt className="truncate text-sm font-medium text-gray-500">Dönüşüm Sayısı</dt>
+                    <dd>
+                      <div className="text-lg font-medium text-gray-900">
+                        {loadingData ? "..." : stats.conversionCount}
+                      </div>
+                    </dd>
+                  </dl>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
 
-        <div className="mt-6">
-          <Tabs defaultValue="users" className="space-y-4">
-            <TabsList className="grid w-full grid-cols-3">
-              <TabsTrigger value="users">
-                <Users className="mr-2 h-4 w-4" />
+        <div className="mt-6 overflow-hidden rounded-lg bg-white shadow">
+          <div className="border-b border-gray-200">
+            <nav className="-mb-px flex" aria-label="Tabs">
+              <button
+                onClick={() => setActiveTab("users")}
+                className={`w-1/3 border-b-2 py-4 px-1 text-center text-sm font-medium ${
+                  activeTab === "users"
+                    ? "border-blue-500 text-blue-600"
+                    : "border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700"
+                }`}
+              >
                 Kullanıcılar
-              </TabsTrigger>
-              <TabsTrigger value="messages">
-                <MessageSquare className="mr-2 h-4 w-4" />
+              </button>
+              <button
+                onClick={() => setActiveTab("messages")}
+                className={`w-1/3 border-b-2 py-4 px-1 text-center text-sm font-medium ${
+                  activeTab === "messages"
+                    ? "border-blue-500 text-blue-600"
+                    : "border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700"
+                }`}
+              >
                 Mesajlar
-              </TabsTrigger>
-              <TabsTrigger value="activity">
-                <ActivityIcon className="mr-2 h-4 w-4" />
+              </button>
+              <button
+                onClick={() => setActiveTab("activity")}
+                className={`w-1/3 border-b-2 py-4 px-1 text-center text-sm font-medium ${
+                  activeTab === "activity"
+                    ? "border-blue-500 text-blue-600"
+                    : "border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700"
+                }`}
+              >
                 Aktivite Günlüğü
-              </TabsTrigger>
-            </TabsList>
+              </button>
+            </nav>
+          </div>
 
-            <TabsContent value="users" className="space-y-4">
-              <Card>
-                <CardHeader>
-                  <CardTitle>Kullanıcılar</CardTitle>
-                  <CardDescription>Telegram botunuzu kullanan tüm kullanıcıların listesi</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div className="flex items-center space-x-2 mb-4">
-                    <div className="relative flex-1">
-                      <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                      <Input
-                        placeholder="Kullanıcı ara..."
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        className="pl-8"
-                      />
-                    </div>
-                    <Button variant="outline" size="icon" onClick={fetchData} disabled={loadingData}>
-                      <RefreshCw className={`h-4 w-4 ${loadingData ? "animate-spin" : ""}`} />
-                    </Button>
-                  </div>
+          <div className="p-4">
+            <div className="mb-4 flex items-center space-x-2">
+              <div className="relative flex-1">
+                <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
+                  <svg
+                    className="h-5 w-5 text-gray-400"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                    xmlns="http://www.w3.org/2000/svg"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth="2"
+                      d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                    ></path>
+                  </svg>
+                </div>
+                <input
+                  type="text"
+                  className="block w-full rounded-md border-gray-300 pl-10 focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                  placeholder={
+                    activeTab === "users"
+                      ? "Kullanıcı ara..."
+                      : activeTab === "messages"
+                        ? "Mesaj ara..."
+                        : "Aktivite ara..."
+                  }
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                />
+              </div>
 
-                  <div className="rounded-md border">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Telegram ID</TableHead>
-                          <TableHead>Kullanıcı Adı</TableHead>
-                          <TableHead>Ad</TableHead>
-                          <TableHead>Soyad</TableHead>
-                          <TableHead>Kayıt Tarihi</TableHead>
-                          <TableHead>Son Aktif</TableHead>
-                          <TableHead className="text-right">İşlemler</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {loadingData ? (
-                          Array.from({ length: 5 }).map((_, index) => (
-                            <TableRow key={index}>
-                              <TableCell colSpan={7}>
-                                <Skeleton className="h-10 w-full" />
-                              </TableCell>
-                            </TableRow>
-                          ))
-                        ) : users.length === 0 ? (
-                          <TableRow>
-                            <TableCell colSpan={7} className="text-center py-4">
-                              {searchQuery ? "Arama sonucu bulunamadı" : "Henüz kullanıcı yok"}
-                            </TableCell>
-                          </TableRow>
-                        ) : (
-                          users.map((user) => (
-                            <TableRow key={user.id}>
-                              <TableCell>{user.telegram_id}</TableCell>
-                              <TableCell>{user.username || "-"}</TableCell>
-                              <TableCell>{user.first_name || "-"}</TableCell>
-                              <TableCell>{user.last_name || "-"}</TableCell>
-                              <TableCell>{formatDate(user.created_at)}</TableCell>
-                              <TableCell>{formatDate(user.last_active)}</TableCell>
-                              <TableCell className="text-right">
-                                <AlertDialog>
-                                  <AlertDialogTrigger asChild>
-                                    <Button
-                                      variant="ghost"
-                                      size="icon"
-                                      className="text-destructive hover:text-destructive"
-                                    >
-                                      {deleteLoading === user.id ? (
-                                        <Loader2 className="h-4 w-4 animate-spin" />
-                                      ) : (
-                                        <Trash2 className="h-4 w-4" />
-                                      )}
-                                    </Button>
-                                  </AlertDialogTrigger>
-                                  <AlertDialogContent>
-                                    <AlertDialogHeader>
-                                      <AlertDialogTitle>Kullanıcıyı Sil</AlertDialogTitle>
-                                      <AlertDialogDescription>
-                                        Bu kullanıcıyı silmek istediğinizden emin misiniz? Bu işlem geri alınamaz.
-                                      </AlertDialogDescription>
-                                    </AlertDialogHeader>
-                                    <AlertDialogFooter>
-                                      <AlertDialogCancel>İptal</AlertDialogCancel>
-                                      <AlertDialogAction
-                                        onClick={() => handleDeleteUser(user.id)}
-                                        className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                                      >
-                                        Sil
-                                      </AlertDialogAction>
-                                    </AlertDialogFooter>
-                                  </AlertDialogContent>
-                                </AlertDialog>
-                              </TableCell>
-                            </TableRow>
-                          ))
-                        )}
-                      </TableBody>
-                    </Table>
-                  </div>
-                </CardContent>
-              </Card>
-            </TabsContent>
+              {activeTab === "messages" && (
+                <select
+                  className="rounded-md border-gray-300 py-2 pl-3 pr-10 text-base focus:border-blue-500 focus:outline-none focus:ring-blue-500 sm:text-sm"
+                  value={messageType}
+                  onChange={(e) => setMessageType(e.target.value)}
+                >
+                  <option value="all">Tüm tipler</option>
+                  <option value="text">Metin</option>
+                  <option value="command">Komut</option>
+                  <option value="callback">Callback</option>
+                </select>
+              )}
 
-            <TabsContent value="messages" className="space-y-4">
-              <Card>
-                <CardHeader>
-                  <CardTitle>Mesajlar</CardTitle>
-                  <CardDescription>Kullanıcıların botunuza gönderdiği tüm mesajlar</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div className="flex items-center space-x-2 mb-4">
-                    <div className="relative flex-1">
-                      <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                      <Input
-                        placeholder="Mesaj ara..."
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        className="pl-8"
-                      />
-                    </div>
-                    <Select value={messageType} onValueChange={setMessageType}>
-                      <SelectTrigger className="w-[180px]">
-                        <SelectValue placeholder="Tüm mesaj tipleri" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">Tüm tipler</SelectItem>
-                        <SelectItem value="text">Metin</SelectItem>
-                        <SelectItem value="command">Komut</SelectItem>
-                        <SelectItem value="callback">Callback</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <Button variant="outline" size="icon" onClick={fetchData} disabled={loadingData}>
-                      <RefreshCw className={`h-4 w-4 ${loadingData ? "animate-spin" : ""}`} />
-                    </Button>
-                  </div>
+              <button
+                onClick={fetchData}
+                className="inline-flex items-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+              >
+                <svg
+                  className={`-ml-1 mr-2 h-5 w-5 ${loadingData ? "animate-spin" : ""}`}
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                  xmlns="http://www.w3.org/2000/svg"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth="2"
+                    d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                  ></path>
+                </svg>
+                Yenile
+              </button>
+            </div>
 
-                  <div className="rounded-md border">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Kullanıcı</TableHead>
-                          <TableHead>Mesaj</TableHead>
-                          <TableHead>Tip</TableHead>
-                          <TableHead>Tarih</TableHead>
-                          <TableHead className="text-right">İşlemler</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {loadingData ? (
-                          Array.from({ length: 5 }).map((_, index) => (
-                            <TableRow key={index}>
-                              <TableCell colSpan={5}>
-                                <Skeleton className="h-10 w-full" />
-                              </TableCell>
-                            </TableRow>
-                          ))
-                        ) : messages.length === 0 ? (
-                          <TableRow>
-                            <TableCell colSpan={5} className="text-center py-4">
-                              {searchQuery || messageType !== "all" ? "Arama sonucu bulunamadı" : "Henüz mesaj yok"}
-                            </TableCell>
-                          </TableRow>
-                        ) : (
-                          messages.map((message) => (
-                            <TableRow key={message.id}>
-                              <TableCell>
-                                {message.user ? (
-                                  <div>
-                                    <div>
-                                      {message.user.first_name} {message.user.last_name || ""}
-                                    </div>
-                                    <div className="text-xs text-muted-foreground">
-                                      @{message.user.username || "Bilinmiyor"}
-                                    </div>
-                                  </div>
-                                ) : (
-                                  <div>
-                                    <div>@{message.username || "Bilinmiyor"}</div>
-                                    <div className="text-xs text-muted-foreground">{message.telegram_id}</div>
-                                  </div>
-                                )}
-                              </TableCell>
-                              <TableCell className="max-w-md truncate">{message.message_text}</TableCell>
-                              <TableCell>
-                                <Badge
-                                  variant={
-                                    message.message_type === "command"
-                                      ? "default"
-                                      : message.message_type === "callback"
-                                        ? "secondary"
-                                        : "outline"
-                                  }
-                                >
-                                  {message.message_type}
-                                </Badge>
-                              </TableCell>
-                              <TableCell>{formatDate(message.created_at)}</TableCell>
-                              <TableCell className="text-right">
-                                <AlertDialog>
-                                  <AlertDialogTrigger asChild>
-                                    <Button
-                                      variant="ghost"
-                                      size="icon"
-                                      className="text-destructive hover:text-destructive"
-                                    >
-                                      {deleteLoading === message.id ? (
-                                        <Loader2 className="h-4 w-4 animate-spin" />
-                                      ) : (
-                                        <Trash2 className="h-4 w-4" />
-                                      )}
-                                    </Button>
-                                  </AlertDialogTrigger>
-                                  <AlertDialogContent>
-                                    <AlertDialogHeader>
-                                      <AlertDialogTitle>Mesajı Sil</AlertDialogTitle>
-                                      <AlertDialogDescription>
-                                        Bu mesajı silmek istediğinizden emin misiniz? Bu işlem geri alınamaz.
-                                      </AlertDialogDescription>
-                                    </AlertDialogHeader>
-                                    <AlertDialogFooter>
-                                      <AlertDialogCancel>İptal</AlertDialogCancel>
-                                      <AlertDialogAction
-                                        onClick={() => handleDeleteMessage(message.id)}
-                                        className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                                      >
-                                        Sil
-                                      </AlertDialogAction>
-                                    </AlertDialogFooter>
-                                  </AlertDialogContent>
-                                </AlertDialog>
-                              </TableCell>
-                            </TableRow>
-                          ))
-                        )}
-                      </TableBody>
-                    </Table>
-                  </div>
-                </CardContent>
-              </Card>
-            </TabsContent>
+            {activeTab === "users" && (
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th
+                        scope="col"
+                        className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500"
+                      >
+                        Telegram ID
+                      </th>
+                      <th
+                        scope="col"
+                        className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500"
+                      >
+                        Kullanıcı Adı
+                      </th>
+                      <th
+                        scope="col"
+                        className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500"
+                      >
+                        Ad
+                      </th>
+                      <th
+                        scope="col"
+                        className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500"
+                      >
+                        Soyad
+                      </th>
+                      <th
+                        scope="col"
+                        className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500"
+                      >
+                        Kayıt Tarihi
+                      </th>
+                      <th
+                        scope="col"
+                        className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500"
+                      >
+                        Son Aktif
+                      </th>
+                      <th scope="col" className="relative px-6 py-3">
+                        <span className="sr-only">İşlemler</span>
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200 bg-white">
+                    {loadingData ? (
+                      <tr>
+                        <td colSpan={7} className="py-4 text-center">
+                          Yükleniyor...
+                        </td>
+                      </tr>
+                    ) : users.length === 0 ? (
+                      <tr>
+                        <td colSpan={7} className="py-4 text-center">
+                          {searchQuery ? "Arama sonucu bulunamadı" : "Henüz kullanıcı yok"}
+                        </td>
+                      </tr>
+                    ) : (
+                      users.map((user) => (
+                        <tr key={user.id}>
+                          <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-500">{user.telegram_id}</td>
+                          <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-500">{user.username || "-"}</td>
+                          <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-500">{user.first_name || "-"}</td>
+                          <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-500">{user.last_name || "-"}</td>
+                          <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-500">
+                            {formatDate(user.created_at)}
+                          </td>
+                          <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-500">
+                            {formatDate(user.last_active)}
+                          </td>
+                          <td className="whitespace-nowrap px-6 py-4 text-right text-sm font-medium">
+                            <button
+                              onClick={() => {
+                                if (confirm("Bu kullanıcıyı silmek istediğinizden emin misiniz?")) {
+                                  handleDeleteUser(user.id)
+                                }
+                              }}
+                              className="text-red-600 hover:text-red-900"
+                            >
+                              Sil
+                            </button>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
 
-            <TabsContent value="activity" className="space-y-4">
-              <Card>
-                <CardHeader>
-                  <CardTitle>Aktivite Günlüğü</CardTitle>
-                  <CardDescription>Kullanıcıların botunuzla etkileşimlerinin detaylı günlüğü</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div className="flex items-center space-x-2 mb-4">
-                    <div className="relative flex-1">
-                      <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                      <Input
-                        placeholder="Aktivite ara..."
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        className="pl-8"
-                      />{" "}
-                      => setSearchQuery(e.target.value)} className="pl-8" />
-                    </div>
-                    <Button variant="outline" size="icon" onClick={fetchData} disabled={loadingData}>
-                      <RefreshCw className={`h-4 w-4 ${loadingData ? "animate-spin" : ""}`} />
-                    </Button>
-                  </div>
+            {activeTab === "messages" && (
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th
+                        scope="col"
+                        className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500"
+                      >
+                        Kullanıcı
+                      </th>
+                      <th
+                        scope="col"
+                        className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500"
+                      >
+                        Mesaj
+                      </th>
+                      <th
+                        scope="col"
+                        className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500"
+                      >
+                        Tip
+                      </th>
+                      <th
+                        scope="col"
+                        className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500"
+                      >
+                        Tarih
+                      </th>
+                      <th scope="col" className="relative px-6 py-3">
+                        <span className="sr-only">İşlemler</span>
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200 bg-white">
+                    {loadingData ? (
+                      <tr>
+                        <td colSpan={5} className="py-4 text-center">
+                          Yükleniyor...
+                        </td>
+                      </tr>
+                    ) : messages.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="py-4 text-center">
+                          {searchQuery || messageType !== "all" ? "Arama sonucu bulunamadı" : "Henüz mesaj yok"}
+                        </td>
+                      </tr>
+                    ) : (
+                      messages.map((message) => (
+                        <tr key={message.id}>
+                          <td className="px-6 py-4 text-sm text-gray-500">
+                            {message.user ? (
+                              <div>
+                                <div>
+                                  {message.user.first_name} {message.user.last_name || ""}
+                                </div>
+                                <div className="text-xs text-gray-400">@{message.user.username || "Bilinmiyor"}</div>
+                              </div>
+                            ) : (
+                              <div>
+                                <div>@{message.username || "Bilinmiyor"}</div>
+                                <div className="text-xs text-gray-400">{message.telegram_id}</div>
+                              </div>
+                            )}
+                          </td>
+                          <td className="max-w-md truncate px-6 py-4 text-sm text-gray-500">{message.message_text}</td>
+                          <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-500">
+                            <span
+                              className={`inline-flex rounded-full px-2 text-xs font-semibold leading-5 ${
+                                message.message_type === "command"
+                                  ? "bg-blue-100 text-blue-800"
+                                  : message.message_type === "callback"
+                                    ? "bg-purple-100 text-purple-800"
+                                    : "bg-gray-100 text-gray-800"
+                              }`}
+                            >
+                              {message.message_type}
+                            </span>
+                          </td>
+                          <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-500">
+                            {formatDate(message.created_at)}
+                          </td>
+                          <td className="whitespace-nowrap px-6 py-4 text-right text-sm font-medium">
+                            <button
+                              onClick={() => {
+                                if (confirm("Bu mesajı silmek istediğinizden emin misiniz?")) {
+                                  handleDeleteMessage(message.id)
+                                }
+                              }}
+                              className="text-red-600 hover:text-red-900"
+                            >
+                              Sil
+                            </button>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
 
-                  <div className="rounded-md border">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Kullanıcı</TableHead>
-                          <TableHead>İşlem</TableHead>
-                          <TableHead>Detaylar</TableHead>
-                          <TableHead>Tarih</TableHead>
-                          <TableHead className="text-right">İşlemler</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {loadingData ? (
-                          Array.from({ length: 5 }).map((_, index) => (
-                            <TableRow key={index}>
-                              <TableCell colSpan={5}>
-                                <Skeleton className="h-10 w-full" />
-                              </TableCell>
-                            </TableRow>
-                          ))
-                        ) : activities.length === 0 ? (
-                          <TableRow>
-                            <TableCell colSpan={5} className="text-center py-4">
-                              {searchQuery ? "Arama sonucu bulunamadı" : "Henüz aktivite kaydı yok"}
-                            </TableCell>
-                          </TableRow>
-                        ) : (
-                          activities.map((activity) => (
-                            <TableRow key={activity.id}>
-                              <TableCell>
-                                {activity.user ? (
-                                  <div>
-                                    <div>
-                                      {activity.user.first_name} {activity.user.last_name || ""}
-                                    </div>
-                                    <div className="text-xs text-muted-foreground">
-                                      @{activity.user.username || "Bilinmiyor"}
-                                    </div>
-                                  </div>
-                                ) : (
-                                  <div className="text-xs text-muted-foreground">{activity.telegram_id}</div>
-                                )}
-                              </TableCell>
-                              <TableCell>
-                                <Badge
-                                  variant={
-                                    activity.action.includes("conversion")
-                                      ? "default"
-                                      : activity.action.includes("menu")
-                                        ? "secondary"
-                                        : activity.action.includes("error")
-                                          ? "destructive"
-                                          : "outline"
-                                  }
-                                >
-                                  {activity.action}
-                                </Badge>
-                              </TableCell>
-                              <TableCell className="max-w-md truncate">{activity.details || "-"}</TableCell>
-                              <TableCell>{formatDate(activity.created_at)}</TableCell>
-                              <TableCell className="text-right">
-                                <AlertDialog>
-                                  <AlertDialogTrigger asChild>
-                                    <Button
-                                      variant="ghost"
-                                      size="icon"
-                                      className="text-destructive hover:text-destructive"
-                                    >
-                                      {deleteLoading === activity.id ? (
-                                        <Loader2 className="h-4 w-4 animate-spin" />
-                                      ) : (
-                                        <Trash2 className="h-4 w-4" />
-                                      )}
-                                    </Button>
-                                  </AlertDialogTrigger>
-                                  <AlertDialogContent>
-                                    <AlertDialogHeader>
-                                      <AlertDialogTitle>Aktiviteyi Sil</AlertDialogTitle>
-                                      <AlertDialogDescription>
-                                        Bu aktiviteyi silmek istediğinizden emin misiniz? Bu işlem geri alınamaz.
-                                      </AlertDialogDescription>
-                                    </AlertDialogHeader>
-                                    <AlertDialogFooter>
-                                      <AlertDialogCancel>İptal</AlertDialogCancel>
-                                      <AlertDialogAction
-                                        onClick={() => handleDeleteActivity(activity.id)}
-                                        className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                                      >
-                                        Sil
-                                      </AlertDialogAction>
-                                    </AlertDialogFooter>
-                                  </AlertDialogContent>
-                                </AlertDialog>
-                              </TableCell>
-                            </TableRow>
-                          ))
-                        )}
-                      </TableBody>
-                    </Table>
-                  </div>
-                </CardContent>
-              </Card>
-            </TabsContent>
-          </Tabs>
+            {activeTab === "activity" && (
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th
+                        scope="col"
+                        className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500"
+                      >
+                        Kullanıcı
+                      </th>
+                      <th
+                        scope="col"
+                        className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500"
+                      >
+                        İşlem
+                      </th>
+                      <th
+                        scope="col"
+                        className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500"
+                      >
+                        Detaylar
+                      </th>
+                      <th
+                        scope="col"
+                        className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500"
+                      >
+                        Tarih
+                      </th>
+                      <th scope="col" className="relative px-6 py-3">
+                        <span className="sr-only">İşlemler</span>
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200 bg-white">
+                    {loadingData ? (
+                      <tr>
+                        <td colSpan={5} className="py-4 text-center">
+                          Yükleniyor...
+                        </td>
+                      </tr>
+                    ) : activities.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="py-4 text-center">
+                          {searchQuery ? "Arama sonucu bulunamadı" : "Henüz aktivite kaydı yok"}
+                        </td>
+                      </tr>
+                    ) : (
+                      activities.map((activity) => (
+                        <tr key={activity.id}>
+                          <td className="px-6 py-4 text-sm text-gray-500">
+                            {activity.user ? (
+                              <div>
+                                <div>
+                                  {activity.user.first_name} {activity.user.last_name || ""}
+                                </div>
+                                <div className="text-xs text-gray-400">@{activity.user.username || "Bilinmiyor"}</div>
+                              </div>
+                            ) : (
+                              <div className="text-xs text-gray-400">{activity.telegram_id}</div>
+                            )}
+                          </td>
+                          <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-500">
+                            <span
+                              className={`inline-flex rounded-full px-2 text-xs font-semibold leading-5 ${
+                                activity.action.includes("login")
+                                  ? "bg-green-100 text-green-800"
+                                  : activity.action.includes("error")
+                                    ? "bg-red-100 text-red-800"
+                                    : activity.action.includes("payment")
+                                      ? "bg-yellow-100 text-yellow-800"
+                                      : "bg-gray-100 text-gray-800"
+                              }`}
+                            >
+                              {activity.action}
+                            </span>
+                          </td>
+                          <td className="max-w-md truncate px-6 py-4 text-sm text-gray-500">{activity.details || "-"}</td>
+                          <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-500">
+                            {formatDate(activity.created_at)}
+                          </td>
+                          <td className="whitespace-nowrap px-6 py-4 text-right text-sm font-medium">
+                            <button
+                              onClick={() => {
+                                if (confirm("Bu aktiviteyi silmek istediğinizden emin misiniz?")) {
+                                  handleDeleteActivity(activity.id)
+                                }
+                              }}
+                              className="text-red-600 hover:text-red-900"
+                            >
+                              Sil
+                            </button>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         </div>
       </main>
     </div>
