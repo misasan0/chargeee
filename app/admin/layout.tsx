@@ -13,9 +13,18 @@ export default async function AdminLayout({
     data: { session },
   } = await supabase.auth.getSession()
 
+  // URL'yi kontrol et
+  const requestUrl = cookies().get("next-url")?.value || ""
+  const isLoginPage = requestUrl.includes("/admin/login") || requestUrl.includes("/admin/create-admin")
+
   // Login sayfasında değilsek ve oturum yoksa login sayfasına yönlendir
-  if (!session && !cookies().get("next-url")?.value?.includes("/admin/login")) {
+  if (!session && !isLoginPage) {
     redirect("/admin/login")
+  }
+
+  // Oturum varsa ve login sayfasındaysak dashboard'a yönlendir
+  if (session && isLoginPage) {
+    redirect("/admin/dashboard")
   }
 
   return <div>{children}</div>
