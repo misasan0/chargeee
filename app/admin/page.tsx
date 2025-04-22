@@ -8,10 +8,11 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
-import { AlertCircle, Users, MessageSquare, Activity, LogOut } from "lucide-react"
+import { AlertCircle, Users, MessageSquare, Activity, LogOut, RefreshCw, Search } from "lucide-react"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 
 export default function AdminPage() {
   const [email, setEmail] = useState("nikelbaba@admin.com")
@@ -28,6 +29,8 @@ export default function AdminPage() {
     activeUsers: 0,
   })
   const [loadingData, setLoadingData] = useState(false)
+  const [searchQuery, setSearchQuery] = useState("")
+  const [messageType, setMessageType] = useState<string>("")
   const supabase = createClientComponentClient()
 
   // Oturum durumunu kontrol et
@@ -75,28 +78,64 @@ export default function AdminPage() {
     setLoadingData(true)
     try {
       // Kullanıcıları getir
-      const { data: usersData } = await supabase.from("users").select("*").order("created_at", { ascending: false })
+      let userQuery = supabase.from("users").select("*").order("created_at", { ascending: false })
+
+      if (searchQuery) {
+        userQuery = userQuery.or(
+          `username.ilike.%${searchQuery}%,first_name.ilike.%${searchQuery}%,last_name.ilike.%${searchQuery}%,telegram_id.ilike.%${searchQuery}%`,
+        )
+      }
+
+      const { data: usersData } = await userQuery
       setUsers(usersData || [])
 
       // Mesajları getir
-      const { data: messagesData } = await supabase
+      let messageQuery = supabase
         .from("messages")
         .select("*, user:users(username, first_name, last_name)")
         .order("created_at", { ascending: false })
+
+      if (searchQuery) {
+        messageQuery = messageQuery.or(
+          `message_text.ilike.%${searchQuery}%,telegram_id.ilike.%${searchQuery}%,username.ilike.%${searchQuery}%`,
+        )
+      }
+
+      if (messageType && messageType !== "all") {
+        messageQuery = messageQuery.eq("message_type", messageType)
+      }
+
+      const { data: messagesData } = await messageQuery
       setMessages(messagesData || [])
 
       // Aktiviteleri getir
-      const { data: activitiesData } = await supabase
+      let activityQuery = supabase
         .from("activity_logs")
         .select("*, user:users(username, first_name, last_name)")
         .order("created_at", { ascending: false })
+
+      if (searchQuery) {
+        activityQuery = activityQuery.or(
+          `action.ilike.%${searchQuery}%,details.ilike.%${searchQuery}%,telegram_id.ilike.%${searchQuery}%`,
+        )
+      }
+
+      const { data: activitiesData } = await activityQuery
       setActivities(activitiesData || [])
 
       // İstatistikleri hesapla
+      const oneDayAgo = new Date()
+      oneDayAgo.setDate(oneDayAgo.getDate() - 1)
+
+      const { count: activeCount } = await supabase
+        .from("users")
+        .select("*", { count: "exact", head: true })
+        .gt("last_active", oneDayAgo.toISOString())
+
       setStats({
         totalUsers: usersData?.length || 0,
         totalMessages: messagesData?.length || 0,
-        activeUsers: 0, // Aktif kullanıcı sayısını hesaplamak için daha karmaşık bir sorgu gerekebilir
+        activeUsers: activeCount || 0,
       })
     } catch (error) {
       console.error("Veri alınırken hata oluştu:", error)
@@ -252,11 +291,18 @@ export default function AdminPage() {
         </div>
 
         <Tabs defaultValue="users" className="space-y-4">
-          <TabsList>
-            <TabsTrigger value="users">Kullanıcılar</TabsTrigger>
-            <TabsTrigger value="messages">Mesajlar</TabsTrigger>
-            <TabsTrigger value="activity">Aktivite Günlüğü</TabsTrigger>
+          <TabsList className="w-full border-b pb-0">
+            <TabsTrigger value="users" className="flex-1 rounded-b-none">
+              Kullanıcılar
+            </TabsTrigger>
+            <TabsTrigger value="messages" className="flex-1 rounded-b-none">
+              Mesajlar
+            </TabsTrigger>
+            <TabsTrigger value="activity" className="flex-1 rounded-b-none">
+              Aktivite Günlüğü
+            </TabsTrigger>
           </TabsList>
+
           <TabsContent value="users" className="space-y-4">
             <Card>
               <CardHeader>
@@ -264,6 +310,21 @@ export default function AdminPage() {
                 <CardDescription>Telegram botunuzu kullanan tüm kullanıcıların listesi</CardDescription>
               </CardHeader>
               <CardContent>
+                <div className="flex items-center space-x-2 mb-4">
+                  <div className="relative flex-1">
+                    <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      placeholder="Kullanıcı ara..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="pl-8"
+                    />
+                  </div>
+                  <Button variant="outline" size="icon" onClick={fetchData}>
+                    <RefreshCw className="h-4 w-4" />
+                  </Button>
+                </div>
+
                 <div className="rounded-md border">
                   <Table>
                     <TableHeader>
@@ -286,7 +347,7 @@ export default function AdminPage() {
                       ) : users.length === 0 ? (
                         <TableRow>
                           <TableCell colSpan={6} className="text-center py-4">
-                            Henüz kullanıcı yok
+                            {searchQuery ? "Arama sonucu bulunamadı" : "Henüz kullanıcı yok"}
                           </TableCell>
                         </TableRow>
                       ) : (
@@ -307,6 +368,7 @@ export default function AdminPage() {
               </CardContent>
             </Card>
           </TabsContent>
+
           <TabsContent value="messages" className="space-y-4">
             <Card>
               <CardHeader>
@@ -314,6 +376,32 @@ export default function AdminPage() {
                 <CardDescription>Kullanıcıların botunuza gönderdiği tüm mesajlar</CardDescription>
               </CardHeader>
               <CardContent>
+                <div className="flex items-center space-x-2 mb-4">
+                  <div className="relative flex-1">
+                    <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      placeholder="Mesaj ara..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="pl-8"
+                    />
+                  </div>
+                  <Select value={messageType} onValueChange={setMessageType}>
+                    <SelectTrigger className="w-[180px]">
+                      <SelectValue placeholder="Tüm mesaj tipleri" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">Tüm tipler</SelectItem>
+                      <SelectItem value="text">Metin</SelectItem>
+                      <SelectItem value="command">Komut</SelectItem>
+                      <SelectItem value="callback">Callback</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Button variant="outline" size="icon" onClick={fetchData}>
+                    <RefreshCw className="h-4 w-4" />
+                  </Button>
+                </div>
+
                 <div className="rounded-md border">
                   <Table>
                     <TableHeader>
@@ -334,7 +422,7 @@ export default function AdminPage() {
                       ) : messages.length === 0 ? (
                         <TableRow>
                           <TableCell colSpan={4} className="text-center py-4">
-                            Henüz mesaj yok
+                            {searchQuery || messageType ? "Arama sonucu bulunamadı" : "Henüz mesaj yok"}
                           </TableCell>
                         </TableRow>
                       ) : (
@@ -381,6 +469,7 @@ export default function AdminPage() {
               </CardContent>
             </Card>
           </TabsContent>
+
           <TabsContent value="activity" className="space-y-4">
             <Card>
               <CardHeader>
@@ -388,6 +477,21 @@ export default function AdminPage() {
                 <CardDescription>Kullanıcıların botunuzla etkileşimlerinin detaylı günlüğü</CardDescription>
               </CardHeader>
               <CardContent>
+                <div className="flex items-center space-x-2 mb-4">
+                  <div className="relative flex-1">
+                    <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      placeholder="Aktivite ara..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="pl-8"
+                    />
+                  </div>
+                  <Button variant="outline" size="icon" onClick={fetchData}>
+                    <RefreshCw className="h-4 w-4" />
+                  </Button>
+                </div>
+
                 <div className="rounded-md border">
                   <Table>
                     <TableHeader>
@@ -408,7 +512,7 @@ export default function AdminPage() {
                       ) : activities.length === 0 ? (
                         <TableRow>
                           <TableCell colSpan={4} className="text-center py-4">
-                            Henüz aktivite kaydı yok
+                            {searchQuery ? "Arama sonucu bulunamadı" : "Henüz aktivite kaydı yok"}
                           </TableCell>
                         </TableRow>
                       ) : (
