@@ -27,20 +27,51 @@ export async function POST(request: Request) {
       const lastName = message.from.last_name || ""
       const telegramId = message.from.id.toString()
 
+      console.log(`Kullanıcı bilgileri: ID=${telegramId}, Username=${username}, Name=${firstName} ${lastName}`)
+
       // Kullanıcıyı veritabanına kaydet veya güncelle
-      const { error: userError } = await supabase.from("users").upsert(
-        {
+      const { data: existingUser, error: checkError } = await supabase
+        .from("users")
+        .select("*")
+        .eq("telegram_id", telegramId)
+        .single()
+
+      if (checkError && checkError.code !== "PGRST116") {
+        console.error("Kullanıcı kontrol edilirken hata:", checkError)
+      }
+
+      if (!existingUser) {
+        console.log(`Yeni kullanıcı ekleniyor: ${telegramId}`)
+        const { error: insertError } = await supabase.from("users").insert({
           telegram_id: telegramId,
           username,
           first_name: firstName,
           last_name: lastName,
           last_active: new Date().toISOString(),
-        },
-        { onConflict: "telegram_id" },
-      )
+        })
 
-      if (userError) {
-        console.error("Kullanıcı kaydedilirken hata:", userError)
+        if (insertError) {
+          console.error("Kullanıcı eklenirken hata:", insertError)
+        } else {
+          console.log(`Kullanıcı başarıyla eklendi: ${telegramId}`)
+        }
+      } else {
+        console.log(`Mevcut kullanıcı güncelleniyor: ${telegramId}`)
+        const { error: updateError } = await supabase
+          .from("users")
+          .update({
+            username,
+            first_name: firstName,
+            last_name: lastName,
+            last_active: new Date().toISOString(),
+          })
+          .eq("telegram_id", telegramId)
+
+        if (updateError) {
+          console.error("Kullanıcı güncellenirken hata:", updateError)
+        } else {
+          console.log(`Kullanıcı başarıyla güncellendi: ${telegramId}`)
+        }
       }
 
       // Mesajı veritabanına kaydet
@@ -54,14 +85,22 @@ export async function POST(request: Request) {
 
       if (messageError) {
         console.error("Mesaj kaydedilirken hata:", messageError)
+      } else {
+        console.log(`Mesaj başarıyla kaydedildi: ${text}`)
       }
 
       // Aktivite günlüğüne kaydet
-      await supabase.from("activity_logs").insert({
+      const { error: activityError } = await supabase.from("activity_logs").insert({
         telegram_id: telegramId,
         action: "message_received",
         details: `Mesaj: ${text}`,
       })
+
+      if (activityError) {
+        console.error("Aktivite kaydedilirken hata:", activityError)
+      } else {
+        console.log(`Aktivite başarıyla kaydedildi: message_received`)
+      }
 
       // Komutları işle
       if (text.startsWith("/")) {
@@ -87,7 +126,7 @@ export async function POST(request: Request) {
             // Örnek olarak sabit bir yanıt döndürüyoruz
             await sendMessage(
               chatId,
-              `${cryptoName} fiyatı: $${Math.floor(Math.random() * 10000) / 100}\n\nBu örnek bir yanıttır. Gerçek bir API entegrasyonu için kodu güncelleyin.`,
+              `${cryptoName} fiyatı: ${Math.floor(Math.random() * 10000) / 100} USD\n\nBu örnek bir yanıttır. Gerçek bir API entegrasyonu için kodu güncelle  * 10000) / 100} USD\n\nBu örnek bir yanıttır. Gerçek bir API entegrasyonu için kodu güncelleyin.`,
             )
           } catch (error) {
             console.error("Kripto fiyatı alınırken hata:", error)
