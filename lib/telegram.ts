@@ -1,5 +1,11 @@
 import { getCoinPrices, convertCryptoToTRY, convertTRYToCrypto } from "./crypto"
 import type { TelegramUpdate, TelegramMessage, InlineKeyboardMarkup } from "@/types"
+import { createClient } from "@supabase/supabase-js"
+
+// Supabase istemcisini oluştur
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || ""
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || ""
+const supabase = createClient(supabaseUrl, supabaseKey)
 
 // Kullanıcı durumlarını takip etmek için
 interface UserState {
@@ -17,6 +23,8 @@ const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN
 const SUPPORTED_COINS = ["BTC", "USDT", "TRX", "XMR", "DOGE"]
 
 export async function handleUpdate(update: TelegramUpdate) {
+  console.log("Telegram update:", JSON.stringify(update))
+
   if (update.message) {
     await handleMessage(update.message)
   } else if (update.callback_query) {
@@ -27,8 +35,22 @@ export async function handleUpdate(update: TelegramUpdate) {
 // handleMessage fonksiyonunu güncelleyelim
 async function handleMessage(message: TelegramMessage) {
   const chatId = message.chat.id
-  const text = message.text?.toLowerCase()
+  const text = message.text?.toLowerCase() || ""
   const isGroup = message.chat.type === "group" || message.chat.type === "supergroup"
+  const username = message.from?.username || ""
+  const firstName = message.from?.first_name || ""
+  const lastName = message.from?.last_name || ""
+  const telegramId = message.from?.id.toString() || ""
+
+  // Kullanıcıyı veritabanına kaydet veya güncelle
+  await saveOrUpdateUser(telegramId, username, firstName, lastName)
+
+  // Mesajı veritabanına kaydet
+  const messageType = text.startsWith("/") ? "command" : "text"
+  await saveMessage(telegramId, username, text, messageType)
+
+  // Aktivite günlüğüne kaydet
+  await saveActivity(telegramId, "message_received", `Mesaj: ${text}`)
 
   if (!text) return
 
@@ -42,8 +64,14 @@ async function handleMessage(message: TelegramMessage) {
       await handleConversion(chatId, amount, fromCurrency, toCurrency, isGroup)
       // Durumu temizle
       delete userStates[chatId]
+
+      // Aktivite günlüğüne kaydet
+      await saveActivity(telegramId, "conversion_completed", `${amount} ${fromCurrency} -> ${toCurrency}`)
     } else {
       await sendMessage(chatId, "Geçersiz miktar. Lütfen sayısal bir değer girin.")
+
+      // Aktivite günlüğüne kaydet
+      await saveActivity(telegramId, "conversion_error", "Geçersiz miktar girişi")
     }
     return
   }
@@ -59,14 +87,23 @@ async function handleMessage(message: TelegramMessage) {
 
         if (!isNaN(amount)) {
           await handleConversion(chatId, amount, fromCurrency, toCurrency, isGroup)
+
+          // Aktivite günlüğüne kaydet
+          await saveActivity(telegramId, "conversion_completed", `${amount} ${fromCurrency} -> ${toCurrency}`)
         } else {
           await sendMessage(chatId, "Geçersiz miktar. Lütfen sayısal bir değer girin.")
+
+          // Aktivite günlüğüne kaydet
+          await saveActivity(telegramId, "conversion_error", "Geçersiz miktar girişi")
         }
       } else {
         await sendMessage(
           chatId,
           "Doğru format: /convert [miktar] [kaynak para birimi] [hedef para birimi]\nÖrnek: /convert 100 TRY BTC",
         )
+
+        // Aktivite günlüğüne kaydet
+        await saveActivity(telegramId, "conversion_error", "Yanlış format")
       }
     }
     // Grup içinde başka komutları işleme
@@ -76,6 +113,9 @@ async function handleMessage(message: TelegramMessage) {
   // Özel mesajlarda tüm komutları işle
   if (text === "/start" || text === "/menu") {
     await sendMainMenu(chatId)
+
+    // Aktivite günlüğüne kaydet
+    await saveActivity(telegramId, "menu_opened", text === "/start" ? "Bot başlatıldı" : "Ana menü açıldı")
   } else if (text.startsWith("/convert")) {
     const parts = text.split(" ")
     if (parts.length === 4) {
@@ -85,14 +125,23 @@ async function handleMessage(message: TelegramMessage) {
 
       if (!isNaN(amount)) {
         await handleConversion(chatId, amount, fromCurrency, toCurrency, isGroup)
+
+        // Aktivite günlüğüne kaydet
+        await saveActivity(telegramId, "conversion_completed", `${amount} ${fromCurrency} -> ${toCurrency}`)
       } else {
         await sendMessage(chatId, "Geçersiz miktar. Lütfen sayısal bir değer girin.")
+
+        // Aktivite günlüğüne kaydet
+        await saveActivity(telegramId, "conversion_error", "Geçersiz miktar girişi")
       }
     } else {
       await sendMessage(
         chatId,
         "Doğru format: /convert [miktar] [kaynak para birimi] [hedef para birimi]\nÖrnek: /convert 100 TRY BTC",
       )
+
+      // Aktivite günlüğüne kaydet
+      await saveActivity(telegramId, "conversion_error", "Yanlış format")
     }
   }
 }
@@ -103,11 +152,26 @@ async function handleCallbackQuery(callbackQuery: any) {
   const messageId = callbackQuery.message.message_id
   const data = callbackQuery.data
   const isPrivate = callbackQuery.message.chat.type === "private"
+  const telegramId = callbackQuery.from.id.toString()
+  const username = callbackQuery.from.username || ""
+  const firstName = callbackQuery.from.first_name || ""
+  const lastName = callbackQuery.from.last_name || ""
+
+  // Kullanıcıyı veritabanına kaydet veya güncelle
+  await saveOrUpdateUser(telegramId, username, firstName, lastName)
+
+  // Callback verisini veritabanına kaydet
+  await saveMessage(telegramId, username, data, "callback")
+
+  // Aktivite günlüğüne kaydet
+  await saveActivity(telegramId, "callback_received", `Callback: ${data}`)
 
   if (data === "prices") {
     await sendCryptoPrices(chatId)
+    await saveActivity(telegramId, "prices_viewed", "Kripto fiyatları görüntülendi")
   } else if (data === "convert_menu") {
     await sendConversionMenu(chatId)
+    await saveActivity(telegramId, "convert_menu_opened", "Dönüşüm menüsü açıldı")
   } else if (data.startsWith("convert_to_try_")) {
     const coin = data.replace("convert_to_try_", "")
 
@@ -121,9 +185,11 @@ async function handleCallbackQuery(callbackQuery: any) {
         },
       }
       await sendMessage(chatId, `Lütfen TL'ye dönüştürmek istediğiniz ${coin} miktarını girin:`)
+      await saveActivity(telegramId, "conversion_started", `${coin} -> TRY dönüşümü başlatıldı`)
     } else {
       // Gruplarda komut kullanımını anlat
       await sendConversionPrompt(chatId, coin, "TRY")
+      await saveActivity(telegramId, "conversion_prompt", `${coin} -> TRY dönüşüm talimatı verildi`)
     }
   } else if (data.startsWith("convert_from_try_")) {
     const coin = data.replace("convert_from_try_", "")
@@ -138,12 +204,15 @@ async function handleCallbackQuery(callbackQuery: any) {
         },
       }
       await sendMessage(chatId, `Lütfen ${coin}'a dönüştürmek istediğiniz TL miktarını girin:`)
+      await saveActivity(telegramId, "conversion_started", `TRY -> ${coin} dönüşümü başlatıldı`)
     } else {
       // Gruplarda komut kullanımını anlat
       await sendConversionPrompt(chatId, "TRY", coin)
+      await saveActivity(telegramId, "conversion_prompt", `TRY -> ${coin} dönüşüm talimatı verildi`)
     }
   } else if (data === "main_menu") {
     await sendMainMenu(chatId)
+    await saveActivity(telegramId, "menu_opened", "Ana menü açıldı")
   }
 
   // Answer callback query to remove loading state
@@ -249,7 +318,6 @@ async function sendConversionMenu(chatId: number | string) {
 }
 
 // handleConversion fonksiyonunu güncelleyelim - butonları sadece özel mesajlarda göstersin
-
 async function handleConversion(
   chatId: number | string,
   amount: number,
@@ -316,4 +384,94 @@ export async function sendMessage(chatId: number | string, text: string, replyMa
   }
 
   return await response.json()
+}
+
+// Supabase fonksiyonları
+async function saveOrUpdateUser(telegramId: string, username: string, firstName: string, lastName: string) {
+  try {
+    // Kullanıcının var olup olmadığını kontrol et
+    const { data: existingUser, error: checkError } = await supabase
+      .from("users")
+      .select("*")
+      .eq("telegram_id", telegramId)
+      .maybeSingle()
+
+    if (checkError) {
+      console.error("Kullanıcı kontrol edilirken hata:", checkError)
+      return
+    }
+
+    if (!existingUser) {
+      console.log(`Yeni kullanıcı ekleniyor: ${telegramId}`)
+      const { error: insertError } = await supabase.from("users").insert({
+        telegram_id: telegramId,
+        username,
+        first_name: firstName,
+        last_name: lastName,
+        last_active: new Date().toISOString(),
+      })
+
+      if (insertError) {
+        console.error("Kullanıcı eklenirken hata:", insertError)
+      } else {
+        console.log(`Kullanıcı başarıyla eklendi: ${telegramId}`)
+      }
+    } else {
+      console.log(`Mevcut kullanıcı güncelleniyor: ${telegramId}`)
+      const { error: updateError } = await supabase
+        .from("users")
+        .update({
+          username,
+          first_name: firstName,
+          last_name: lastName,
+          last_active: new Date().toISOString(),
+        })
+        .eq("telegram_id", telegramId)
+
+      if (updateError) {
+        console.error("Kullanıcı güncellenirken hata:", updateError)
+      } else {
+        console.log(`Kullanıcı başarıyla güncellendi: ${telegramId}`)
+      }
+    }
+  } catch (error) {
+    console.error("saveOrUpdateUser fonksiyonunda hata:", error)
+  }
+}
+
+async function saveMessage(telegramId: string, username: string, text: string, messageType: string) {
+  try {
+    const { error } = await supabase.from("messages").insert({
+      telegram_id: telegramId,
+      username,
+      message_text: text,
+      message_type: messageType,
+    })
+
+    if (error) {
+      console.error("Mesaj kaydedilirken hata:", error)
+    } else {
+      console.log(`Mesaj başarıyla kaydedildi: ${text}`)
+    }
+  } catch (error) {
+    console.error("saveMessage fonksiyonunda hata:", error)
+  }
+}
+
+async function saveActivity(telegramId: string, action: string, details: string) {
+  try {
+    const { error } = await supabase.from("activity_logs").insert({
+      telegram_id: telegramId,
+      action,
+      details,
+    })
+
+    if (error) {
+      console.error("Aktivite kaydedilirken hata:", error)
+    } else {
+      console.log(`Aktivite başarıyla kaydedildi: ${action}`)
+    }
+  } catch (error) {
+    console.error("saveActivity fonksiyonunda hata:", error)
+  }
 }
